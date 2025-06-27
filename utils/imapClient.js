@@ -9,9 +9,7 @@ function createImapConnection() {
     port: parseInt(process.env.IMAP_PORT),
     tls: process.env.IMAP_TLS === 'true',
     tlsOptions: { rejectUnauthorized: false },
-    keepalive: false,
-    connTimeout: 60000,
-    authTimeout: 5000
+    keepalive: false
   });
 }
 
@@ -33,17 +31,7 @@ function fetchEmailsForAddress(tempMailAddress) {
     const imap = createImapConnection();
     let isResolved = false;
 
-    const timeout = setTimeout(() => {
-      if (!isResolved) {
-        console.log('Operation timeout, resolving with empty array');
-        isResolved = true;
-        imap.end();
-        resolve([]);
-      }
-    }, 30000);
-
     function cleanup() {
-      clearTimeout(timeout);
       if (!isResolved) {
         isResolved = true;
       }
@@ -62,27 +50,15 @@ function fetchEmailsForAddress(tempMailAddress) {
 
         console.log(`Inbox opened. Total messages: ${box.messages.total}`);
         
-        // Search for emails in the last 7 days to reduce load
-        const since = new Date();
-        since.setDate(since.getDate() - 7);
+        console.log(`Searching for emails to ${tempMailAddress} using HEADER TO search only`);
         
-        console.log(`Searching for emails to ${tempMailAddress} since ${since.toDateString()}`);
-        
-        // Simple search for TO field
-        imap.search(['SINCE', since, 'TO', tempMailAddress], (err, results) => {
+        // Search using only HEADER TO without SINCE
+        imap.search([['HEADER', 'TO', tempMailAddress]], (err, results) => {
           if (err) {
             console.error('Search error:', err);
-            // Try without date filter
-            imap.search(['TO', tempMailAddress], (err2, results2) => {
-              if (err2) {
-                console.error('Fallback search error:', err2);
-                cleanup();
-                imap.end();
-                return resolve([]);
-              }
-              processSearchResults(results2 || []);
-            });
-            return;
+            cleanup();
+            imap.end();
+            return resolve([]);
           }
           
           processSearchResults(results || []);
