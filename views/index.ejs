@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SuperMail - Temporary Email Service</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .loading { opacity: 0.6; }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <nav class="bg-white border-b border-gray-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <span class="text-2xl font-bold text-gray-900">SuperMail</span>
+                </div>
+                <div class="flex items-center">
+                    <a href="/admin" class="text-gray-600 hover:text-gray-900">Admin</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- Custom Email Creation Section -->
+        <div class="bg-white rounded-lg shadow-sm p-6 mb-6">
+            <h2 class="text-xl font-semibold text-gray-900 mb-4">Create Custom Email</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <div>
+                    <label for="customUsername" class="block text-sm font-medium text-gray-700 mb-1">Custom Username (optional)</label>
+                    <input type="text" id="customUsername" placeholder="Enter your username"
+                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                    <p class="text-xs text-gray-500 mt-1">Leave empty for random generation</p>
+                </div>
+                <div>
+                    <label for="customDomain" class="block text-sm font-medium text-gray-700 mb-1">Select Domain</label>
+                    <select id="customDomain" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                        <option value="<%= domain %>"><%= domain %></option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Email Display Section -->
+        <div class="bg-white rounded-lg shadow-sm p-6 mb-8">
+            <h2 class="text-xl font-semibold text-gray-900 mb-4">Your Temporary Email Address</h2>
+            <div class="flex flex-col sm:flex-row gap-4">
+                <div class="flex-grow">
+                    <input type="text" id="emailInput" readonly
+                           value="<%= prefilledEmail %>"
+                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                           placeholder="Click 'Generate' to create a temporary email">
+                </div>
+                <div class="flex gap-2">
+                    <button id="generateBtn"
+                        class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+                        Generate
+                    </button>
+                    <button id="copyBtn"
+                        class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2">
+                        Copy
+                    </button>
+                    <button id="refreshBtn"
+                        class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2">
+                        <span id="refreshText">Refresh</span>
+                        <span id="refreshSpinner" class="hidden">⟳</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Inbox Section -->
+        <div class="bg-white rounded-lg shadow-sm">
+            <div class="border-b border-gray-200 px-6 py-4 flex justify-between items-center">
+                <h2 class="text-xl font-semibold text-gray-900">Inbox</h2>
+                <div class="text-sm text-gray-500">
+                    <span id="lastRefresh">Never</span> | Auto-refresh: 5s
+                </div>
+            </div>
+            <div id="emailList" class="divide-y divide-gray-200">
+                <div class="p-6 text-center text-gray-500">
+                    Waiting for incoming messages...
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <div id="toast" class="fixed bottom-4 right-4 hidden transform transition-all duration-300">
+        <div class="bg-gray-800 text-white px-6 py-3 rounded-lg shadow-lg">
+            <span id="toastMessage"></span>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const emailInput = document.getElementById('emailInput');
+            const generateBtn = document.getElementById('generateBtn');
+            const copyBtn = document.getElementById('copyBtn');
+            const refreshBtn = document.getElementById('refreshBtn');
+            const refreshText = document.getElementById('refreshText');
+            const refreshSpinner = document.getElementById('refreshSpinner');
+            const emailList = document.getElementById('emailList');
+            const toast = document.getElementById('toast');
+            const toastMessage = document.getElementById('toastMessage');
+            const customUsername = document.getElementById('customUsername');
+            const customDomain = document.getElementById('customDomain');
+            const lastRefresh = document.getElementById('lastRefresh');
+
+            let autoRefreshInterval;
+
+            function showToast(message, duration = 3000) {
+                toastMessage.textContent = message;
+                toast.classList.remove('hidden');
+                toast.classList.add('translate-y-0', 'opacity-100');
+                setTimeout(() => {
+                    toast.classList.add('translate-y-2', 'opacity-0');
+                    setTimeout(() => {
+                        toast.classList.add('hidden');
+                        toast.classList.remove('translate-y-2', 'opacity-0');
+                    }, 300);
+                }, duration);
+            }
+
+            function updateLastRefresh() {
+                const now = new Date();
+                lastRefresh.textContent = now.toLocaleTimeString();
+            }
+
+            async function generateEmail() {
+                generateBtn.disabled = true;
+                try {
+                    const username = customUsername.value.trim();
+                    let postData = {};
+                    
+                    if (username) {
+                        // Client-side validation
+                        const usernamePattern = /^[a-zA-Z0-9._-]+$/;
+                        if (!usernamePattern.test(username)) {
+                            showToast('Invalid username. Use only letters, numbers, dots, underscores, and hyphens.');
+                            return;
+                        }
+                        postData.customUsername = username;
+                        postData.domain = customDomain.value;
+                    }
+                    
+                    const response = await fetch('/api/generate-email', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(postData)
+                    });
+                    
+                    if (!response.ok) throw new Error('Failed to generate email');
+                    
+                    const data = await response.json();
+                    if (data.success && data.email) {
+                        emailInput.value = data.email;
+                        showToast('New email address generated!');
+                        customUsername.value = ''; // Clear custom username after generation
+                        startAutoRefresh(); // Start auto-refresh for new email
+                        refreshInbox();
+                    } else {
+                        throw new Error(data.error || 'Failed to generate email');
+                    }
+                } catch (error) {
+                    console.error('Error:', error);
+                    showToast('Failed to generate email address');
+                } finally {
+                    generateBtn.disabled = false;
+                }
+            }
+
+            async function refreshInbox() {
+                if (!emailInput.value) {
+                    showToast('Generate an email address first');
+                    return;
+                }
+                
+                refreshBtn.disabled = true;
+                refreshText.classList.add('hidden');
+                refreshSpinner.classList.remove('hidden');
+                refreshSpinner.style.animation = 'spin 1s linear infinite';
+                
+                try {
+                    console.log(`Refreshing inbox for: ${emailInput.value}`);
+                    const response = await fetch(`/api/emails/${encodeURIComponent(emailInput.value)}`);
+                    
+                    if (!response.ok) throw new Error('Failed to fetch emails');
+                    
+                    const data = await response.json();
+                    console.log('Received data:', data);
+                    
+                    if (data.success && data.emails) {
+                        updateLastRefresh();
+                        
+                        if (data.emails.length > 0) {
+                            emailList.innerHTML = data.emails.map((email, index) => `
+                                <div class="p-6 hover:bg-gray-50 cursor-pointer transition-colors duration-150 border-l-4 border-blue-500">
+                                    <div class="flex justify-between items-start mb-2">
+                                        <div class="flex-grow">
+                                            <h3 class="text-sm font-semibold text-gray-900">${email.from || 'Unknown Sender'}</h3>
+                                            <p class="text-sm text-gray-600 font-medium">${email.subject || 'No Subject'}</p>
+                                        </div>
+                                        <span class="text-xs text-gray-500 ml-4">${new Date(email.date).toLocaleString()}</span>
+                                    </div>
+                                    ${email.preview ? `<p class="text-sm text-gray-500 line-clamp-2">${email.preview}</p>` : ''}
+                                    <div class="mt-2 text-xs text-blue-600">
+                                        Source: ${data.source} | Email #${index + 1}
+                                    </div>
+                                </div>
+                            `).join('');
+                            
+                            if (data.emails.length === 1) {
+                                showToast(`New email received from ${data.emails[0].from}`);
+                            } else if (data.emails.length > 1) {
+                                showToast(`${data.emails.length} emails found`);
+                            }
+                        } else {
+                            emailList.innerHTML = `
+                                <div class="p-6 text-center text-gray-500">
+                                    <div class="text-lg mb-2">📭</div>
+                                    <div>No messages yet</div>
+                                    <div class="text-xs mt-1">Checking every 5 seconds...</div>
+                                </div>
+                            `;
+                        }
+                    } else {
+                        throw new Error(data.error || 'Failed to fetch emails');
+                    }
+                } catch (error) {
+                    console.error('Error:', error);
+                    showToast('Failed to refresh inbox');
+                    emailList.innerHTML = `
+                        <div class="p-6 text-center text-red-500">
+                            <div class="text-lg mb-2">⚠️</div>
+                            <div>Error loading emails</div>
+                            <div class="text-xs mt-1">${error.message}</div>
+                        </div>
+                    `;
+                } finally {
+                    refreshBtn.disabled = false;
+                    refreshText.classList.remove('hidden');
+                    refreshSpinner.classList.add('hidden');
+                    refreshSpinner.style.animation = '';
+                }
+            }
+
+            function startAutoRefresh() {
+                // Clear existing interval
+                if (autoRefreshInterval) {
+                    clearInterval(autoRefreshInterval);
+                }
+                
+                // Start new interval - refresh every 5 seconds
+                autoRefreshInterval = setInterval(() => {
+                    if (emailInput.value) {
+                        refreshInbox();
+                    }
+                }, 5000);
+            }
+
+            generateBtn.addEventListener('click', generateEmail);
+
+            copyBtn.addEventListener('click', () => {
+                if (!emailInput.value) {
+                    showToast('Generate an email address first');
+                    return;
+                }
+                emailInput.select();
+                document.execCommand('copy');
+                showToast('Email address copied to clipboard!');
+            });
+
+            refreshBtn.addEventListener('click', refreshInbox);
+
+            // If email is prefilled, start auto-refresh and initial refresh
+            if (emailInput.value) {
+                startAutoRefresh();
+                refreshInbox();
+            }
+
+            // Add CSS for spinner animation
+            const style = document.createElement('style');
+            style.textContent = `
+                @keyframes spin {
+                    from { transform: rotate(0deg); }
+                    to { transform: rotate(360deg); }
+                }
+            `;
+            document.head.appendChild(style);
+        });
+    </script>
+</body>
+</html>
