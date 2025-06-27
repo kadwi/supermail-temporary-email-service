@@ -1,16 +1,37 @@
 const Imap = require('node-imap');
 require('dotenv').config();
 
-function createImapConnection() {
+const imapConnections = new Map();
+
+function createImapConnection(user, password) {
   return new Imap({
-    user: process.env.IMAP_USER,
-    password: process.env.IMAP_PASSWORD,
+    user,
+    password,
     host: process.env.IMAP_HOST,
     port: parseInt(process.env.IMAP_PORT),
     tls: process.env.IMAP_TLS === 'true',
     tlsOptions: { rejectUnauthorized: false },
-    keepalive: false
+    keepalive: true,
+    connTimeout: 60000,
+    authTimeout: 5000
   });
+}
+
+function getImapConnection(email) {
+  if (imapConnections.has(email)) {
+    const conn = imapConnections.get(email);
+    if (conn.state === 'authenticated' || conn.state === 'connected') {
+      return conn;
+    } else {
+      imapConnections.delete(email);
+    }
+  }
+  // For demo, using same user/password from env, ideally per email credentials
+  const user = process.env.IMAP_USER;
+  const password = process.env.IMAP_PASSWORD;
+  const imap = createImapConnection(user, password);
+  imapConnections.set(email, imap);
+  return imap;
 }
 
 function extractEmailPreview(body, maxLength = 150) {
@@ -26,18 +47,47 @@ function extractEmailPreview(body, maxLength = 150) {
   return text.substring(0, maxLength) + '...';
 }
 
-function fetchEmailsForAddress(tempMailAddress) {
+function fetchEmailsForAddress(tempMailAddress, limit = 10, offset = 0) {
   return new Promise((resolve, reject) => {
-    const imap = createImapConnection();
+    const imap = getImapConnection(tempMailAddress);
     let isResolved = false;
 
+    const timeout = setTimeout(() => {
+      if (!isResolved) {
+        console.log('Operation timeout, resolving with empty array');
+        isResolved = true;
+        imap.end();
+        resolve([]);
+      }
+    }, 30000);
+
     function cleanup() {
+      clearTimeout(timeout);
       if (!isResolved) {
         isResolved = true;
       }
     }
 
-    imap.once('ready', function() {
+    if (imap.state === 'authenticated' || imap.state === 'connected') {
+      openInboxAndFetch();
+    } else {
+      imap.once('ready', openInboxAndFetch);
+      imap.once('error', (err) => {
+        console.error('IMAP connection error:', err);
+        cleanup();
+        resolve([]);
+      });
+      imap.once('end', () => {
+        console.log('IMAP connection ended');
+        if (!isResolved) {
+          cleanup();
+          resolve([]);
+        }
+      });
+      imap.connect();
+    }
+
+    function openInboxAndFetch() {
       console.log('IMAP ready, opening inbox...');
       
       imap.openBox('INBOX', true, (err, box) => {
@@ -52,7 +102,6 @@ function fetchEmailsForAddress(tempMailAddress) {
         
         console.log(`Searching for emails to ${tempMailAddress} using HEADER TO search only`);
         
-        // Search using only HEADER TO without SINCE
         imap.search([['HEADER', 'TO', tempMailAddress]], (err, results) => {
           if (err) {
             console.error('Search error:', err);
@@ -61,7 +110,11 @@ function fetchEmailsForAddress(tempMailAddress) {
             return resolve([]);
           }
           
-          processSearchResults(results || []);
+          // Apply offset and limit for pagination
+          const paginatedResults = results.slice(offset, offset + limit);
+          console.log(`Processing emails ${offset} to ${offset + limit} (total found: ${results.length})`);
+
+          processSearchResults(paginatedResults || []);
         });
 
         function processSearchResults(results) {
@@ -74,14 +127,10 @@ function fetchEmailsForAddress(tempMailAddress) {
             return resolve([]);
           }
 
-          // Limit to last 10 emails to avoid timeout
-          const limitedResults = results.slice(-10);
-          console.log(`Processing last ${limitedResults.length} emails`);
-
           const emails = [];
           let processed = 0;
 
-          const fetch = imap.fetch(limitedResults, {
+          const fetch = imap.fetch(results, {
             bodies: 'HEADER.FIELDS (FROM TO SUBJECT DATE)',
             struct: true
           });
@@ -102,7 +151,6 @@ function fetchEmailsForAddress(tempMailAddress) {
               });
               
               stream.once('end', () => {
-                // Parse headers
                 const lines = buffer.split('\r\n');
                 for (let line of lines) {
                   if (line.toLowerCase().startsWith('from:')) {
@@ -137,16 +185,15 @@ function fetchEmailsForAddress(tempMailAddress) {
               emails.push(email);
               processed++;
               
-              console.log(`Processed email ${processed}/${limitedResults.length}: "${email.subject}" from ${email.from}`);
+              console.log(`Processed email ${processed}/${results.length}: "${email.subject}" from ${email.from}`);
               
-              if (processed === limitedResults.length) {
+              if (processed === results.length) {
                 console.log(`✓ Found ${emails.length} emails for ${tempMailAddress}`);
                 
-                // Sort by date (newest first)
                 emails.sort((a, b) => new Date(b.date) - new Date(a.date));
                 
                 cleanup();
-                imap.end();
+                // Do not end connection here to keep persistent connection
                 resolve(emails);
               }
             });
@@ -155,8 +202,8 @@ function fetchEmailsForAddress(tempMailAddress) {
           fetch.once('error', (err) => {
             console.error('Fetch error:', err);
             cleanup();
-            imap.end();
-            resolve(emails); // Return what we have so far
+            // Do not end connection here to keep persistent connection
+            resolve(emails);
           });
 
           fetch.once('end', () => {
@@ -164,24 +211,7 @@ function fetchEmailsForAddress(tempMailAddress) {
           });
         }
       });
-    });
-
-    imap.once('error', (err) => {
-      console.error('IMAP connection error:', err);
-      cleanup();
-      resolve([]);
-    });
-
-    imap.once('end', () => {
-      console.log('IMAP connection ended');
-      if (!isResolved) {
-        cleanup();
-        resolve([]);
-      }
-    });
-
-    console.log(`Connecting to IMAP for ${tempMailAddress}...`);
-    imap.connect();
+    }
   });
 }
 
